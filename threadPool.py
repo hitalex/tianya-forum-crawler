@@ -9,7 +9,7 @@ threadPool.py
 
 import traceback
 from threading import Thread, Lock
-from Queue import Queue,Empty
+from Queue import Queue, Empty, LifoQueue
 import logging
 import time
 import pdb
@@ -51,19 +51,12 @@ class Worker(Thread):
                 #print "Thread ID: ", str(self.ID), " with thread state: ", self.state
                 self.threadPool.increaseRunsNum() 
                 # 抓取网页
-                func(*args, **kargs) 
-                # TODO : 搞清楚如何利用 resultQueue
-                """
-                if result:
-                    #the func, i.e. _taskHandler always returns none, so putTaskResult will never be called
-                    self.threadPool.putTaskResult(*result)
-                """
+                func(*args, **kargs)
                 self.threadPool.taskDone() # 通知Queue一个任务已经执行完毕
             except Exception, e:
                 log.critical(traceback.format_exc())
             finally:
                 self.threadPool.decreaseRunsNum()
-
 
 class ThreadPool(object):
 
@@ -73,8 +66,10 @@ class ThreadPool(object):
         self.runningLock = Lock() #线程锁
         self.taskLock = Lock() # getTask函数的锁
         self.running = 0    #正在run的线程数
-        self.taskQueue = Queue() #任务队列
-        self.resultQueue = Queue() #结果队列, but never used here
+        
+        # 设置为LIFO队列：在抓取了第一个post的页面后，随后需要添加所有其后的评论页，
+        # 使用LIFO队列可以保证尽快将第一个post的所有评论抓取到，并存储
+        self.taskQueue = LifoQueue() #任务队列
         
         # 一分钟内允许的最大访问次数
         self.max_tasks_per_period = max_tasks_per_period
@@ -134,12 +129,6 @@ class ThreadPool(object):
     def taskDone(self, *args, **kargs):
         self.taskQueue.task_done()
 
-    def putTaskResult(self, *args):
-        self.resultQueue.put(args)
-
-    def getTaskResult(self, *args, **kargs):
-        return self.resultQueue.get(*args, **kargs)
-
     def increaseRunsNum(self):
         self.runningLock.acquire()
         self.running += 1 #正在运行的线程数加1
@@ -154,4 +143,4 @@ class ThreadPool(object):
         #线程池的所有任务包括：
         #taskQueue中未被下载的任务, resultQueue中完成了但是还没被取出的任务, 正在运行的任务
         #因此任务总数为三者之和
-        return self.taskQueue.qsize()+self.resultQueue.qsize()+self.running
+        return self.taskQueue.qsize() + self.running
