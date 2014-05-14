@@ -142,9 +142,9 @@ class ThreadIDCrawler(object):
             next_page_url = None
             for href in hrefs:
                 # 只有满足讨论帖链接格式的链接才会被处理
-                m = regex_thread.match(href)
+                m = regex_post_first.match(href)
                 if self._isHttpOrHttpsProtocol(href) and m is not None:
-                    thread_list.append(m.group(1))
+                    thread_list.append(m.group('post_id'))
 
                 # 在当前页面中查找匹配“下一页”的链接
                 m = regex_next_page.match(href)
