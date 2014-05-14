@@ -21,7 +21,7 @@ from bs4 import BeautifulSoup
 from webPage import WebPage
 from threadPool import ThreadPool
 from patterns import *
-#from models import Topic
+from models import Post
 from logconfig import congifLogger
 
 import stacktracer
@@ -48,20 +48,22 @@ class CommentCrawler(object):
         
         # 已经访问的页面: Group id ==> True or False
         self.visited_href = set()
+        self.visited_post = set() # 已经添加访问的页面的id集合
+        self.finished = set() # 已经抓取完毕的topic id集合
+        
         # 抓取失败的topic id
         self.failed = set()
         
         # 依次为每个小组抽取topic评论
         self.section_name = section_name
         self.post_id_list = post_id_list # 等待抓取的topic列表
+        self.current_post_id_list = list(post_id_list) # 用于逐步向任务列表中加入post id
         
         # 存储结果
         # topic ID ==> Topic对象
         self.post_dict = dict()
         # 存放下一个处理的评论页数： topic ID ==> 1,2,3...
         self.next_page = dict()
-        # 已经抓取完毕的topic id集合
-        self.finished = set()
 
         self.is_crawling = False
         
@@ -79,9 +81,10 @@ class CommentCrawler(object):
         self.post_id_list = list(set(self.post_id_list)) # 消除重复的topic id
         print u"Total number of post in section %s: %d." % (self.section_name, len(self.post_id_list))
         
-        # 初始化添加任务
-        for post_id in self.post_id_list:
+        # 初始化添加一部分post的id到列表
+        for i in xrange(self.self.thread_pool.threadNum * 2):
             # TODO: 这里的URL模式只是针对“天涯杂谈”部分的链接
+            post_id = self.current_post_id_list.pop()
             url = "http://bbs.tianya.cn/post-free-%s-1.shtml" % post_id
             self.thread_pool.putTask(self._taskHandler, url)
         
@@ -149,118 +152,116 @@ class CommentCrawler(object):
         
         # 抓取页面内容
         flag = webPage.fetch()
-        match_obj = RETopic.match(url)
-        match_obj2 = REComment.match(url)
-        
+        m = regex_post.match(url)
+        if m == None:
+            log.info('Post链接格式错误：%s in Group: %s.' % (url, self.section_name))
+            return True
+            
+        comment_page_index = int(m.group('page_index'))
+        post_id = m.group('post_id')
         if flag:
-            if match_obj is not None:
-                topic_id = match_obj.group(1)
-                topic = Topic(topic_id, self.section_name)
-                comment_list = topic.parse(webPage, isFirstPage = True) # First page parsing
-                self.topic_dict[topic_id] = topic
-            elif match_obj2 is not None:
-                topic_id = match_obj2.group(1)
-                start = int(match_obj2.group(2))
+            if comment_page_index == 1: # 首页评论
+                post = Post(post_id, self.section_name)
+                # 解析讨论帖的第一个页：包括原帖内容和评论内容
+                comment_list = post.parse(webPage, isFirstPage = True) # First page parsing
+                self.post_dict[post_id] = post
+                
+            elif comment_page_index > 1:
                 # 抽取非第一页的评论数据
-                if topic_id in self.topic_dict:
-                    topic = self.topic_dict[topic_id]
-                    if topic is None:
-                        log.error('未知程序错误：结束topic id为%s的抽取，释放内存。' % topic_id)
-                        self.topic_dict[topic_id] = None
-                        return False
+                if post_id in self.post_dict:
+                    post = self.post_dict[post_id]
                 else:
-                    # 这里的含义为：必须先处理第一页的评论，否则该topic_id不会作为self.topic_dict的键出现
-                    log.error('错误：必须先抽取第一页的评论数据：topic id: %s' % topic_id)
+                    # 这里的含义为：必须先处理第一页的评论，否则该post_id不会作为self.topic_dict的键出现
+                    log.error('错误：必须先抽取第一页的评论数据：post id: %s' % post_id)
                     self.failed.add(topic_id)
                     self.finished.add(topic_id)
                     return False
+                
+                if post is None:
+                    log.error('未知程序错误：结束post id为%s的抽取，释放内存。' % post_id)
+                    self.post_dict[post_id] = post
+                    return False
                     
-                comment_list = topic.parse(webPage, isFirstPage = False) # non-firstpage parsing
-                # 保存到单个文件（已废弃不用）
-                #self.save_thread.putTask(self._saveHandler, comment_list, topic = None)
+                comment_list = post.parse(webPage, isFirstPage = False) # non-firstpage parsing
             else:
-                #pdb.set_trace()
-                log.info('Topic链接格式错误：%s in Group: %s.' % (url, self.section_name))
+                log.info('Post链接格式错误：%s in Group: %s.' % (url, self.section_name))
+
             # 判断抓取是否结束，如果结束，则释放dict内存
             # 这个很重要，因为随着topic数量增多，内存会占很多
-            if topic.isComplete():
+            if post.isComplete():
                 # 对评论进行排序，并查找quote comment
-                self.topic_dict[topic_id].sortComment()
-                self.save_thread.putTask(self._saveTopicHandler, self.topic_dict, topic_id)
-                #self.topic_dict[topic_id] = None        # 释放资源
-                self.finished.add(topic_id)
-                log.info('Topic: %s 抓取结束。' % topic_id)
+                self.post_dict[post_id].sortComment()
+                self.save_thread.putTask(self._saveTopicHandler, self.post_dict, post_id)
+                self.finished.add(post_id)
+                log.info('Topic: %s 抓取结束。' % post_id)
                 
             self.visited_href.add(url)
             return True
         else:
-            # 处理抓取失败的网页集合
-            # 只要一个网页抓取失败，则加入到finished
-            if match_obj is not None:
-                # 讨论贴的第一页就没有抓到，则将其列入finished名单中
-                topic_id = match_obj.group(1)
-            elif match_obj2 is not None:
-                topic_id = match_obj2.group(1)
-                start = int(match_obj2.group(2))
-            else:
-                log.info('Topic链接格式错误：%s in Group: %s.' % (url, self.section_name))
-            
-            # 添加抓取失败的topic id和标记抓取结束的topic
-            self.failed.add(topic_id)
-            self.finished.add(topic_id) # 有可能已经记录了一些某些topic的信息
+            # 处理抓取失败的网页集合，只要一个网页抓取失败，则加入到finished
+            # 添加抓取失败的post id和标记抓取结束的post
+            self.failed.add(post_id)
+            self.finished.add(post_id) # 有可能已经记录了一些某些topic的信息
             self.visited_href.add(url)
             return False
 
     def _getFutureVisit(self):
         """根据当前的访问情况，获取下一个要访问的网页
         """
-        for topic_id in self.topic_dict:
-            if topic_id in self.finished:
+        # 先检查当前正在抓取的所有帖子，目标是尽快将其抓去完并保存
+        for post_id in self.post_dict:
+            if post_id in self.finished:
                 continue
-            topic = self.topic_dict[topic_id]
-            if topic is None:
+            post = self.post_dict[post_id]
+            
+            if post is None:
                 continue
-            if topic.max_comment_page <= 0:
+                
+            if post.total_comment_page <= 0:
                 # 还未处理该topic的首页
                 continue
-            elif topic.max_comment_page == 1:
+            elif post.total_comment_page == 1:
                 # 该topic只有首页有评论
                 continue
             else:
                 # 该topic有多页评论
-                next_start = self.next_page[topic_id]
-                url = "http://www.douban.com/group/topic/" + topic_id + "/?start=" + str(next_start * self.COMMENTS_PER_PAGE)
-                if next_start <= topic.max_comment_page-1:
-                    self.next_page[topic_id] = next_start + 1
+                next_page_index = self.next_page[post_id]
+                url = "http://bbs.tianya.cn/post-free-%s-%d.shtml" % (post_id, next_page_index)
+                if next_page_index <= post.total_comment_page - 1:
+                    self.next_page[post_id] = next_page_index + 1
                     return url
-                else:
-                    continue
-        
-        return None
+                
+        # 如果当前正在处理的帖子全部已经抓取完毕，则加入新帖子post_id
+        post_id = self.current_post_id_list.pop()
+        url = "http://bbs.tianya.cn/post-free-%s-1.shtml" % post_id
+        return url
     
-    def _saveTopicHandler(self, topic_dict, topic_id):
+    def _saveTopicHandler(self, post_dict, post_id):
         """ 存储抓取完毕的帖子信息以及其对应的Comment。
         不过，跟_saveHandler函数不同的是，这里是按照topic id存储
-        @topic_dict 存储topic信息的字典
-        @topic_id 需要存储的topic id
+        post_dict 存储topic信息的字典
+        post_id 需要存储的post id
         """
-        topic = topic_dict[topic_id]
-        topic_path = self.base_path + group_id + '/' + topic_id + '-info.txt'
+        post = post_dict[post_id]
+        post_path = self.base_path + group_id + '/' + post_id + '-info.txt'
         # 存储topic本身的信息
-        f = codecs.open(topic_path, 'w', 'utf-8')
-        s = topic.getSimpleString('[=]')
+        f = codecs.open(post_path, 'w', 'utf-8')
+        s = post.getSimpleString('[=]')
         f.write(s + '\n')
-        #f.write('[*ROWEND*]')
         
         # 存储comment信息,存储到相同的文件中
-        for comment in topic.comment_list:
+        for comment in post.comment_list:
             s = comment.getSimpleString('[=]')
-            #f.write(s + '\n[*ROWEND*]\n')
             f.write(s + '\n')
         f.close()
         
-        self.topic_dict[topic_id] = None        # 释放资源
-        log.info("Topic: %s 存储结束" % topic_id)   
+        # 释放资源
+        # NOTE: del self.post_dict[post_id]不能达到效果，如果需要根据post_id是否在
+        # self.post_dict中来判断是否已经抓取该帖子
+        self.topic_dict[topic_id] = None
+        self.next_page[post_id] = None
+        
+        log.info("Topic: %s 存储结束。" % topic_id)
 
     def _getAllHrefsFromPage(self, url, pageSource):
         '''解析html源码，获取页面所有链接。返回链接列表'''
@@ -281,14 +282,6 @@ class CommentCrawler(object):
         if protocal == 'http' or protocal == 'https':
             return True
         return False
-        
-    def _getAlreadyVisitedNum(self):
-        #visitedGroups保存已经分配给taskQueue的链接，有可能链接还在处理中。
-        #因此真实的已访问链接数为visitedGroups数减去待访问的链接数
-        if len(self.visited_href) == 0:
-            return 0
-        else:
-            return len(self.visited_href) - self.thread_pool.getTaskLeft()
         
 if __name__ == "__main__":
     LINE_FEED = "\n" # 采用windows的换行格式
