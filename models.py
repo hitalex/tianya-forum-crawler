@@ -7,6 +7,7 @@ from datetime import datetime
 import logging
 from lxml import etree # use XPath from lxml
 import operator
+import re
 
 # for debug
 import pdb
@@ -21,26 +22,26 @@ log = logging.getLogger('Main.models')
 一个小组包括一些topic，每个评论包括一些评论
 注意：
 所有的文本全部用UTF-8来编码
+
+NOTE: 关于用户的链接页面，
+如果给定用户ID：http://www.tianya.cn/90086386
+如果给定用户昵称：http://www.tianya.cn/n/小C厨娘
 """
 
 class Comment(object):
     """评论的类
     """
-    def __init__(self, cid, user_id, pubdate, content, has_quote, quote, quote_content_all, \
-            quote_user_id, topic_id, group_id):
+    def __init__(self, cid, user_id, user_name, pubdate, content, quote, post_id, section_id):
         self.cid = cid              # 评论id
         self.user_id = user_id      # 发评论的人的id
+        self.user_name = user_name  # 发评论人的用户名
         self.pubdate = pubdate      # 发布时间
         self.content = content      # 评论内容，不包括引用评论的内容
         
-        self.has_quote = has_quote      # 是否拥有quote
         self.quote = quote          # 引用他人评论, Comment 类
-        # 以下两个为临时存储变量，在找到quote comment之后便会删除
-        self.quote_content_all = quote_content_all
-        self.quote_user_id = quote_user_id
         
-        self.topic_id = topic_id    # 所在topic的id
-        self.group_id = group_id    # 所在小组的id
+        self.post_id = post_id              # 所在post的id
+        self.section_id = section_id    # 所在板块的名称
         
     def __repr__(self):
         # 默认的换行采用Unix/Linux方式
@@ -48,6 +49,7 @@ class Comment(object):
             LINE_FEED = u"\n"
         s = u"评论id：" + self.cid + LINE_FEED
         s += u"评论人id：" + self.user_id + LINE_FEED
+        s += u"评论人用户名：" + self.user_name + LINE_FEED
         s += u"发表时间：" + str(self.pubdate) + LINE_FEED
         if self.quote is not None:
             s += u"引用评论的id：" + self.quote.cid + LINE_FEED
@@ -60,9 +62,10 @@ class Comment(object):
         """
         s = u''
         s += (self.cid + delimiter)
-        s += (self.group_id + delimiter)
-        s += (self.topic_id + delimiter)
+        s += (self.section_id + delimiter)
+        s += (self.post_id + delimiter)
         s += (self.user_id + delimiter)
+        s += (self.user_name + delimiter)
         s += (str(self.pubdate) + delimiter)
 
         if self.quote is None:
@@ -78,12 +81,12 @@ class Comment(object):
         
         return s
         
-class Topic(object):
+class Post(object):
     """小组中的某个话题
     """
-    def __init__(self, topic_id, group_id):
-        self.topic_id = topic_id    # 该topic的id
-        self.group_id = group_id    # 所在小组的id
+    def __init__(self, post_id, section_id):
+        self.post_id = post_id             # 帖子的ID
+        self.section_id = section_id    # 所在的板块
         
         self.user_id = ""           # 发布topic的人的id
         self.user_name = ""         # 用户的昵称
@@ -95,20 +98,20 @@ class Topic(object):
         self.lock = Lock()
         self.comment_list = []      # 所有评论的列表, 属于Comment类
         
-        self.max_comment_page = 0       # 这个topic具有多少页的评论(包括帖子的首页), init with 0
+        self.total_comment_page = 0       # 这个topic具有多少页的评论(包括帖子的首页), init with 0
         # 已经抓取的评论的页面的index
         self.parsedPageIndexSet = set()
         
     def __repr__(self):
         if not ('LINE_FEED' in dir()):
             LINE_FEED = u"\n"
-        s = u"话题 id: " + self.topic_id + LINE_FEED
-        s += u"小组 id: " + self.group_id + LINE_FEED
+        s = u"话题 id: " + self.post_id + LINE_FEED
+        s += u"小组 id: " + self.section_id + LINE_FEED
         s += u"楼主 id: " + self.user_id + u" 名号: " + self.user_name + LINE_FEED
         s += u"发表时间: " + str(self.pubdate) + LINE_FEED
         s += u"链接：" + self.getSelfLink() + LINE_FEED
         s += u"标题: " + self.title + LINE_FEED
-        #s += u"Max number of comment page: " + str(self.max_comment_page) + LINE_FEED
+        #s += u"Max number of comment page: " + str(self.total_comment_page) + LINE_FEED
         s += u"帖子内容: " + LINE_FEED + self.content + LINE_FEED + LINE_FEED
         
         # 添加评论内容
@@ -126,9 +129,10 @@ class Topic(object):
         """ 获取简单字符串表示，不过不包括comment
         """
         s = u""
-        s += (self.topic_id + delimiter)
-        s += (self.group_id + delimiter)
+        s += (self.post_id + delimiter)
+        s += (self.section_id + delimiter)
         s += (self.user_id + delimiter)
+        s += (self.user_name + delimiter)
         # 将title中的换行符去掉
         self.title = self.title.replace('\r', ' ')
         self.title = self.title.replace('\n', ' ')
@@ -150,10 +154,10 @@ class Topic(object):
         
         return s
         
-    def getSelfLink(self):
+    def get_self_link(self):
         """ 获取自身的链接
         """
-        url = u"http://www.douban.com/group/topic/" + self.topic_id + "/"
+        url = "http://bbs.tianya.cn/post-%s-%s-1.shtml" % (self.section_id, self.post_id)
         return url
         
     def parse(self, webPage, isFirstPage):
@@ -163,193 +167,172 @@ class Topic(object):
         返回新添加的comment list
         """
         if isFirstPage:
-            return self.extractFirstPage(webPage)
+            return self.extract_first_page(webPage)
         else:
-            return self.extractNonfirstPage(webPage)
+            return self.extract_nonfirst_page(webPage)
             
-    def isComplete(self):
+    def is_complete(self):
         """ 判断评论抓取是否结束
         """
-        if self.max_comment_page == 0:
+        if self.total_comment_page == 0:
             return False
         
-        if len(self.parsedPageIndexSet) < self.max_comment_page:
+        if len(self.parsedPageIndexSet) < self.total_comment_page:
             return False
         else:
             return True
+            
+    def extract_content(self, cnode):
+        """ 抽取帖子内容或评论的所有内容
+        """
+        # 此句只抽取第一个sub element之前的文本
+        content = cnode.text.strip()
+        # 抓取其他的内容
+        for kid in cnode.iterchildren():
+            if kid.tag == 'a': # 评论回复
+                if kid.text != None:
+                    content += kid.text
+                if kid.tail != None:
+                    content += (kid.tail + '\n')
+            elif kid.tag == 'br' and kid.tail != None:
+                content += (kid.tail.strip() + '\n')
+            elif kid.tag == 'img':
+                content += u"（图片：" + kid.attrib['original'] + u"）" + "\n"
+            else:
+                pass
+                
+        return content
         
-    def extractFirstPage(self, webPage):
+    def extract_first_page(self, pageSource):
         """ 抽取topic首页的topic内容和评论
         返回新添加的comment list
         """
         # 抽取topic首页的内容
-        url = "http://www.douban.com/group/topic/" + self.topic_id + "/"
-        #print "Reading webpage: " + url
+        url = "http://bbs.tianya.cn/post-%s-%s-1.shtml" % (self.section_id, self.post_id)
+        print "Reading webpage: ", url
         
-        url, pageSource = webPage.getDatas() # pageSource已经为unicode格式        
+        #url, pageSource = webPage.getDatas() # pageSource已经为unicode格式
         page = etree.HTML(pageSource)
-        content = page.xpath(u"/html/body/div[@id='wrapper']/div[@id='content']")[0]
+        post_head = page.xpath(u"//div[@id='post_head']")[0]
         # 找到标题：如果标题太长，那么标题会被截断，原标题则会在帖子内容中显示
         # 如果标题不被截断，则原标题不会在帖子内容中显示
-        #pdb.set_trace()
-        tmp = page.xpath(u"//table[@class='infobox']//td[@class='tablecc']")
-        if len(tmp) == 0:
-            # 标题没有被截断
-            titlenode = content.xpath("h1")[0]
-            self.title = titlenode.text.strip()
-        else:
-            titlenode = tmp[0]
-            self.title = etree.tostring(titlenode, method='text', encoding='utf-8').strip()
         
-        if isinstance(self.title, unicode):
-            pass
-        else:
-            self.title = self.title.decode("utf-8")
+        tmp = post_head.xpath(u"h1[@class='atl-title']/span[@class='s_title']/span")[0]
+        self.title = tmp.text.strip()
         
-        lz = page.xpath(u"//div[@class='topic-doc']/h3/span[@class='from']/a")[0]
-        self.user_name = lz.text.strip()
-        url = lz.attrib['href']
-        print url
-        match_obj = REPeople.match(url)
-        assert(match_obj is not None)
-        self.user_id = match_obj.group(1)
-        
-        timenode = content.xpath(u"//div[@class='topic-doc']/h3/span[@class='color-green']")[0]
-        self.pubdate = datetime.strptime(timenode.text, "%Y-%m-%d %H:%M:%S")
-        
-        # 帖子内容
-        # 帖子中可能包含多种内容，在这里仅处理两种文本和图片链接
-        content_node = page.xpath(u"//div[@class='topic-content']")[0]
-        children = content_node.getchildren()
-        self.content = u""
-        for kid in children:
-            if kid.tag == 'p':
-                self.content += etree.tostring(kid, method='text', encoding='utf-8').strip() + "\n"
-            elif kid.tag == 'div' and kid.attrib['class'] == 'topic-figure cc':
-                imgnode = kid.xpath("img")[0]
-                self.content += u"（图片：" + imgnode.attrib['src'] + "）" + "\n"
-            else:
-                pass
+        atl_info = post_head.xpath(u"div/div[@class='atl-info']/span")
+        assert(len(atl_info) == 4)        
+        # 作者信息
+        anode = atl_info[0].xpath(u"a")[0]
+        self.user_id = anode.attrib['uid']
+        self.user_name = anode.attrib['uname']
+        # 发表日期，确保其实unicode编码
+        text = atl_info[1].text.strip()
+        self.pubdate = datetime.strptime(text[3:], "%Y-%m-%d %H:%M:%S")
         
         # 设置本帖子的最大评论页数
-        paginator = page.xpath(u"//div[@id='wrapper']//div[@class='paginator']/a")
+        paginator = page.xpath(u"//div[@class='atl-pages']//a")
         if len(paginator) == 0:
-            self.max_comment_page = 1 # 如果没有paginator，则只有一页评论
+            self.total_comment_page = 1 # 如果没有paginator，则只有一页评论
         else:
-            max_page = int(paginator[-1].text.strip())
-            self.max_comment_page = max_page
-        #print "Total comment page: %d" % self.max_comment_page
+            last_page_url = paginator[-2].attrib['href'].strip() # 最后一页评论的链接
+            m = regex_post.match(last_page_url)
+            max_page_text = m.group('page_index')
+            self.total_comment_page = int(max_page_text)
+        print "Total comment page: %d" % self.total_comment_page
         
-        comments_li = page.xpath(u"//ul[@id='comments']/li")
+        # 抽取帖子内容和评论信息
+        content_comment_list = page.xpath(u"//div[@class='clearfix']/div[@class='atl-main']/div[@class='atl-item']")
+        # 获取帖子的内容
+        content_node = content_comment_list[0].xpath(u"div[@class='atl-content']/div[@class='atl-con-bd clearfix']/div[@class='bbs-content clearfix']")[0]
+        self.content = self.extract_content(content_node)
+        
         # Note: 有可能一个topic下没有评论信息
         newly_added = [] # 本页中新添加的comment
-        for cli in comments_li:
-            comment = self.extractComment(cli)
-            # 为commen_list加锁
-            #pdb.set_trace()
-            if comment is None:
-                continue
-            self.lock.acquire()
-            self.comment_list.append(comment)
-            newly_added.append(comment)
-            self.lock.release()
+        # 只处理有评论的情形
+        if len(content_comment_list) > 1:
+            for comment_node in content_comment_list[1:]:
+                comment = self.extract_comment(comment_node)
+                # 为commen_list加锁
+                #pdb.set_trace()
+                if comment is None:
+                    continue
+                self.lock.acquire()
+                self.comment_list.append(comment)
+                newly_added.append(comment)
+                self.lock.release()
             
-        # 在添加评论后对评论按照日期排序
-        #sorted(self.comment_list, key=operator.attrgetter('pubdate'), reverse = True)
-
         # 添加已经抓取的page index
-        self.parsedPageIndexSet.add(1)
-        
+        self.parsedPageIndexSet.add(1)        
         return newly_added
         
-    def extractComment(self, cli):
+    def extract_comment(self, comment_node):
+        """ 给定评论节点，抽取评论用户/时间/内容
+        """
+        # 页面会返回该评论的index，但是或许不可用，因为可能包含删除的评论
+        lou_id = comment_node.attrib['id']
+
+        # 发表时间
+        text = comment_node.attrib['js_restime']
+        pubdate = datetime.strptime(text, "%Y-%m-%d %H:%M:%S")
+        
         # 从comment节点中抽取出Comment结构，并返回Comment对象
-        #pdb.set_trace()
-        cid = cli.attrib['data-cid']
+        head_node = comment_node.xpath(u"div[@class='atl-head']")[0]
+        cid = head_node.attrib['id']
         
-        nodea = cli.xpath("div[@class='reply-doc content']/div[@class='bg-img-green']/h4/a")[0]
-        #  如果是已注销的用于，则user_name = '[已注销]'
-        user_name = nodea.text
-        user_id = self.extractUserID(nodea.attrib['href'])
-        pnode = cli.xpath("div[@class='reply-doc content']/p")[0]
-        content = unicode(etree.tostring(pnode, method='text', encoding='utf-8')).strip()
-        # 发布时间
-        strtime = cli.xpath("div[@class='reply-doc content']//span[@class='pubtime']")[0].text
-        pubdate = datetime.strptime(strtime, "%Y-%m-%d %H:%M:%S")
+        span_list = head_node.xpath(u"div[@class='atl-info']/span")
+        info_node = span_list[0]        
+        anode = info_node.xpath(u"a")[0]
+        user_name = anode.attrib['uname']
+        user_id = anode.attrib['uid']
         
-        # 判断是否有引用其他回复
-        quote_id = ""
-        quote_node = cli.xpath("div[@class='reply-doc content']/div[@class='reply-quote']")
-        has_quote = False
-        quote_content_all = None
-        quote_user_id = None
-        if (quote_node is not None) and (len(quote_node) > 0):
-            quote_content_node = quote_node[0].xpath("span[@class='all']")[0]
-            quote_content_all = quote_content_node.text.strip()
-            url_node = quote_node[0].xpath("span[@class='pubdate']/a")[0]
-            url = url_node.attrib['href']
-            quote_user_id = self.extractUserID(url)
-            has_quote = True
-                
+        content_node = comment_node.xpath(u"div[@class='atl-content']/div[@class='atl-con-bd clearfix']/div[@class='bbs-content']")[0]
+        comment_content = self.extract_content(content_node)
+        
+        print 'Lou id: ', lou_id
+        print 'Comment content: \n', comment_content
+        print ''
+        
         # 这里暂不设置comment所引用的quote，而是只是设立标志位has_quote, 具体quote在抓取完topic之后再确定
-        comment = Comment(cid, user_id, pubdate, content, has_quote, None, \
-            quote_content_all, quote_user_id, self.topic_id, self.group_id)
+        comment = Comment(cid, user_id, user_name, pubdate, comment_content, None, self.post_id, self.section_id)
         #print "Comment content: ", comment.content
         return comment
         
-    def extractUserID(self, url):
-        # 从用户链接中抽取出用户id
-        match_obj = REPeople.match(url)
-        if match_obj is None:
-            pdb.set_trace()
-        return match_obj.group(1)
-        
-    def extractNonfirstPage(self, webPage):
-        # 抽取topic非首页的内容
-        # 如果第一页的评论数不足100，则不可能有第二页评论
-        url, pageSource = webPage.getDatas() # pageSource已经为unicode格式  
-        if len(self.comment_list) < 100:
-            log.warning("It seems there are not engough(100) comments in the first page: \
-                Link: %s, Group id: %s, Topic id: %s." % (url, self.group_id, self.topic_id))
-        
+    def extract_nonfirst_page(self, pageSource):
+        """ 抽取非第一页的评论
+        """
+        #url, pageSource = webPage.getDatas() # pageSource已经为unicode格式
         page = etree.HTML(pageSource)
-        comments_li = page.xpath(u"//ul[@id='comments']/li")
+        content_comment_list = page.xpath(u"//div[@class='clearfix']/div[@class='atl-main']/div[@class='atl-item']")
         # Note: 有可能一个topic下没有评论信息
         newly_added = [] # 本页中新添加的comment
-        for cli in comments_li:
-            comment = self.extractComment(cli)
+        for cnode in content_comment_list:
+            comment = self.extract_comment(cnode)
             # 为commen_list加锁
             self.lock.acquire()
             self.comment_list.append(comment)
             newly_added.append(comment)
             self.lock.release()
         
-        # 对评论进行排序
-        #sorted(self.comment_list, key=operator.attrgetter('pubdate'), reverse = True)
+        m = regex_post.match(url)
+        page_index = int(m.group('page_index'))
+        self.parsedPageIndexSet.add(page_index)
         
-        match_obj = REComment.match(url)
-        start = int(match_obj.group(2))
-        if start % 100 != 0:
-            log.info('链接格式错误：%s' % url)
-            
-        self.parsedPageIndexSet.add(start / 100 + 1)
         return newly_added
         
-    def findPreviousComment(self, end_index, content, user_id):
-        # 根据引用的内容和user id，找到引用的评论的链接
-        # 比较内容时，不考虑其中的换行符
-        import re
-        content = re.sub(r'\s', '', content) # remove any white spaces
+    def find_previous_comment(self, end_index, quote_uname, quote_date):
+        """ 根据引用用户昵称和评论时间，找到引用的评论的链接
+        """
         for i in range(end_index):
             comment = self.comment_list[i]
-            tmp = re.sub(r'\s', '', comment.content)
-            if content == tmp and user_id == comment.user_id:
+            comment_str_date = comment.pubdate.strftime("%Y-%m-%d %H:%M:%S")
+            if quote_uname == comment.user_name and quote_uname == comment_str_date:
                 return comment
                 
         # not found, but should be found
         return None
         
-    def sortComment(self):
+    def sort_comment(self):
         """ 在完成对该topic的基本信息和所有comment的抽取后，对comment按照时间排序，
         如果某条comment引用之前的评论，则需要设置引用的comment id
         """
@@ -359,27 +342,31 @@ class Topic(object):
         comment_count = len(self.comment_list)
         for i in range(comment_count):
             comment = self.comment_list[i]
-            if comment.has_quote:
-                #print 'Has quote: ', comment.cid
-                # 找到引用的回复的comment
-                quote_comment = self.findPreviousComment(i, comment.quote_content_all, comment.quote_user_id)                
-                if quote_comment is None:
-                    log.error('Quote comment not found for comment: %s in topic: %s, \
-                        in group: \%s' % (comment.cid, self.topic_id, self.group_id))
-                    log.error('Quote content: %s' % comment.quote_content_all)
-                    log.error('Comment content: %s\n\n' % comment.content)
-                else:
-                    # 链接找到的comment
-                    comment.quote = quote_comment
-                #释放资源
-                comment.quote_content_all = None
-                comment.quote_user_id = None
+            # 在评论内容中查找类似“@小C厨娘 24楼 2014-05-08 22:04:36”
+            mlist = list(regex_quote.finditer(comment.content))
+            if len(mlist) == 0: # 没有发现对应的模板
+                continue
+            # 查找引用
+            m = mlist[-1]
+            uname = m.group('uname')
+            date = m.group('date')
+            quote_comment = self.find_previous_comment(i, uname, date)
+            if quote_comment is None:
+                log.error('Quote comment not found for comment: %s in post: %s, \
+                    in group: \%s' % (comment.cid, self.post_id, self.section_id))
+                log.error('Comment content: %s\n\n' % comment.content)
+            else:
+                # 链接找到的comment
+                comment.quote = quote_comment
         
 if __name__ == "__main__":
-    #f = open("./testpage/求掀你的英语怎样从烂到无底洞到变强人的！！！.html")
-    f = open(u"./testpage/舌尖上的厨娘 （配图，配过程），挑战你的味蕾_天涯杂谈_天涯论坛.html", "r")
+
+    #f = open(u"./testpage/舌尖上的厨娘 （配图，配过程），挑战你的味蕾_天涯杂谈_天涯论坛.html", "r") # first page
+    f = open(u"./testpage/舌尖上的厨娘 （配图，配过程），挑战你的味蕾(第2页)_天涯杂谈_天涯论坛.html", "r") # non-first page
     strfile = f.read()
     f.close()
-    thread = Tread('4316864', u'天涯杂谈', strfile, u"")
-    print thread
+    post = Post('4316864', u'free')
+    #comment_list = post.extract_first_page(strfile)
+    comment_list = post.extract_nonfirst_page(strfile)
+    print post
 
