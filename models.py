@@ -14,6 +14,7 @@ import pdb
 from threading import Lock
 
 from patterns import *
+from logconfig import congifLogger
 
 log = logging.getLogger('Main.models')
 
@@ -53,6 +54,7 @@ class Comment(object):
         s += u"发表时间：" + str(self.pubdate) + LINE_FEED
         if self.quote is not None:
             s += u"引用评论的id：" + self.quote.cid + LINE_FEED
+            s += u'引用评论人：' + self.quote.user_name + LINE_FEED
         s += u"内容：" + LINE_FEED + self.content + LINE_FEED
         
         return s
@@ -109,7 +111,7 @@ class Post(object):
         s += u"小组 id: " + self.section_id + LINE_FEED
         s += u"楼主 id: " + self.user_id + u" 名号: " + self.user_name + LINE_FEED
         s += u"发表时间: " + str(self.pubdate) + LINE_FEED
-        s += u"链接：" + self.getSelfLink() + LINE_FEED
+        s += u"链接：" + self.get_self_link() + LINE_FEED
         s += u"标题: " + self.title + LINE_FEED
         #s += u"Max number of comment page: " + str(self.total_comment_page) + LINE_FEED
         s += u"帖子内容: " + LINE_FEED + self.content + LINE_FEED + LINE_FEED
@@ -125,7 +127,7 @@ class Post(object):
         return s
         
         
-    def getSimpleString(self, delimiter):
+    def get_simple_string(self, delimiter):
         """ 获取简单字符串表示，不过不包括comment
         """
         s = u""
@@ -203,7 +205,7 @@ class Post(object):
                 
         return content
         
-    def extract_first_page(self, pageSource):
+    def extract_first_page(self, webPage):
         """ 抽取topic首页的topic内容和评论
         返回新添加的comment list
         """
@@ -211,7 +213,12 @@ class Post(object):
         url = "http://bbs.tianya.cn/post-%s-%s-1.shtml" % (self.section_id, self.post_id)
         print "Reading webpage: ", url
         
-        #url, pageSource = webPage.getDatas() # pageSource已经为unicode格式
+        # for debug
+        if isinstance(webPage, unicode):
+            pageSource = webPage
+        else:
+            url, pageSource = webPage.getDatas() # pageSource已经为unicode格式
+            
         page = etree.HTML(pageSource)
         post_head = page.xpath(u"//div[@id='post_head']")[0]
         # 找到标题：如果标题太长，那么标题会被截断，原标题则会在帖子内容中显示
@@ -270,7 +277,7 @@ class Post(object):
         """ 给定评论节点，抽取评论用户/时间/内容
         """
         # 页面会返回该评论的index，但是或许不可用，因为可能包含删除的评论
-        lou_id = comment_node.attrib['id']
+        cid = comment_node.attrib['id']
 
         # 发表时间
         text = comment_node.attrib['js_restime']
@@ -278,7 +285,7 @@ class Post(object):
         
         # 从comment节点中抽取出Comment结构，并返回Comment对象
         head_node = comment_node.xpath(u"div[@class='atl-head']")[0]
-        cid = head_node.attrib['id']
+        #cid = head_node.attrib['id'] # 不再使用这个毫无意义的字符串，改用天涯提供的id
         
         span_list = head_node.xpath(u"div[@class='atl-info']/span")
         info_node = span_list[0]        
@@ -289,7 +296,7 @@ class Post(object):
         content_node = comment_node.xpath(u"div[@class='atl-content']/div[@class='atl-con-bd clearfix']/div[@class='bbs-content']")[0]
         comment_content = self.extract_content(content_node)
         
-        print 'Lou id: ', lou_id
+        print 'Lou id: ', cid
         print 'Comment content: \n', comment_content
         print ''
         
@@ -301,7 +308,11 @@ class Post(object):
     def extract_nonfirst_page(self, pageSource):
         """ 抽取非第一页的评论
         """
-        #url, pageSource = webPage.getDatas() # pageSource已经为unicode格式
+        if isinstance(webPage, unicode):
+            pageSource = webPage
+        else:
+            url, pageSource = webPage.getDatas() # pageSource已经为unicode格式
+
         page = etree.HTML(pageSource)
         content_comment_list = page.xpath(u"//div[@class='clearfix']/div[@class='atl-main']/div[@class='atl-item']")
         # Note: 有可能一个topic下没有评论信息
@@ -314,9 +325,10 @@ class Post(object):
             newly_added.append(comment)
             self.lock.release()
         
-        m = regex_post.match(url)
-        page_index = int(m.group('page_index'))
-        self.parsedPageIndexSet.add(page_index)
+        # 实际抓取网页时用
+        #m = regex_post.match(url)
+        #page_index = int(m.group('page_index'))
+        #self.parsedPageIndexSet.add(page_index)
         
         return newly_added
         
@@ -326,7 +338,7 @@ class Post(object):
         for i in range(end_index):
             comment = self.comment_list[i]
             comment_str_date = comment.pubdate.strftime("%Y-%m-%d %H:%M:%S")
-            if quote_uname == comment.user_name and quote_uname == comment_str_date:
+            if quote_uname == comment.user_name and quote_date == comment_str_date:
                 return comment
                 
         # not found, but should be found
@@ -352,21 +364,37 @@ class Post(object):
             date = m.group('date')
             quote_comment = self.find_previous_comment(i, uname, date)
             if quote_comment is None:
-                log.error('Quote comment not found for comment: %s in post: %s, \
-                    in group: \%s' % (comment.cid, self.post_id, self.section_id))
-                log.error('Comment content: %s\n\n' % comment.content)
+                log.error('Quote comment not found for comment: %s in post: %s, in group: \%s' % (comment.cid, self.post_id, self.section_id))
+                log.error('Current comment content: %s\n\n' % comment.content)
             else:
                 # 链接找到的comment
                 comment.quote = quote_comment
+                log.info(u'评论 %s by %s 引用 评论 %s by %s' % (comment.cid, comment.user_name, comment.quote.cid, comment.quote.user_name))
         
 if __name__ == "__main__":
-
-    #f = open(u"./testpage/舌尖上的厨娘 （配图，配过程），挑战你的味蕾_天涯杂谈_天涯论坛.html", "r") # first page
-    f = open(u"./testpage/舌尖上的厨娘 （配图，配过程），挑战你的味蕾(第2页)_天涯杂谈_天涯论坛.html", "r") # non-first page
-    strfile = f.read()
-    f.close()
+    import sys
+    import codecs
+    sys.stdout = (codecs.getwriter('utf8'))(sys.stdout)
+    
+    congifLogger("log/models.log", 5)
+    
     post = Post('4316864', u'free')
-    #comment_list = post.extract_first_page(strfile)
-    comment_list = post.extract_nonfirst_page(strfile)
-    print post
+    f = codecs.open(u"./testpage/舌尖上的厨娘 （配图，配过程），挑战你的味蕾_天涯杂谈_天涯论坛.html", "r", 'utf8') # first page    
+    strfile_page1 = f.read()
+    f.close()
+    f = codecs.open(u"./testpage/舌尖上的厨娘 （配图，配过程），挑战你的味蕾(第2页)_天涯杂谈_天涯论坛.html", "r", 'utf8') # first page    
+    strfile_page2 = f.read()
+    f.close()
+    f = codecs.open(u"./testpage/舌尖上的厨娘 （配图，配过程），挑战你的味蕾(第3页)_天涯杂谈_天涯论坛.html", "r", 'utf8') # first page    
+    strfile_page3 = f.read()
+    f.close()
+    
+    # 抓取评论
+    comment_list1 = post.extract_first_page(strfile_page1)
+    comment_list2 = post.extract_nonfirst_page(strfile_page2)
+    comment_list3 = post.extract_nonfirst_page(strfile_page3)
+    
+    post.sort_comment()
+    
+    print post.__repr__()
 
