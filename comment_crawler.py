@@ -80,6 +80,10 @@ class CommentCrawler(object):
         self.post_id_list = list(set(self.post_id_list)) # 消除重复的topic id
         print u"Total number of post in section %s: %d." % (self.section_id, len(self.post_id_list))
         
+        # 先为字典建立所有的key，避免出现“RuntimeError: dictionary changed size during iteration”错误
+        for post_id in self.post_id_list:
+            self.post_dict[post_id] = None
+        
         # 初始化添加一部分post的id到列表
         for i in xrange(self.thread_pool.threadNum * 2):
             # TODO: 这里的URL模式只是针对“天涯杂谈”部分的链接
@@ -304,13 +308,21 @@ if __name__ == "__main__":
     import sys
     post_list_path = sys.argv[1]
 
+    import os
     #post_list_path = post_base_path + ('%s-test-list.txt' % section_id)
     f = codecs.open(post_list_path, 'r', 'utf8')
     post_id_list = []
     for line in f:
         line = line.strip()
-        if line is not "":
-            post_id_list.append(line)
+        if line == "":
+            continue
+        # 如果已经抓取，同样放弃
+        post_id = line
+        path = post_base_path + section_id + '/' + post_id + '-info.txt'
+        if os.path.exists(path):
+            continue
+            
+        post_id_list.append(line)
     f.close()
         
     comment_crawler = CommentCrawler(section_id, post_id_list, 5, 10, post_base_path)
