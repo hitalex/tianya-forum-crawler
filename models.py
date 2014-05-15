@@ -378,7 +378,7 @@ class Post(object):
             else:
                 # 链接找到的comment
                 comment.quote = quote_comment
-                print comment.get_simple_string("[=]")
+                #print comment.get_simple_string("[=]")
                 log.info(u'评论 %s by %s 引用 评论 %s by %s' % (comment.cid, comment.user_name, comment.quote.cid, comment.quote.user_name))
         
 if __name__ == "__main__":

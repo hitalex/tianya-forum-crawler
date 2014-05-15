@@ -218,7 +218,7 @@ if __name__ == "__main__":
     time_now = datetime.now()    
     post_id_list_path = 'post-id-list.txt'
     
-    tcrawler = PostIDCrawler(start_url, 1, post_id_list_path, max_post_num = 500)
+    tcrawler = PostIDCrawler(start_url, 1, post_id_list_path, max_post_num = 10000)
     tcrawler.start()
     
     stacktracer.trace_stop()

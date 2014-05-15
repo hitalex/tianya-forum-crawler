@@ -262,7 +262,6 @@ class CommentCrawler(object):
         # 存储comment信息,存储到相同的文件中
         for comment in post.comment_list:
             s = comment.get_simple_string('[=]')
-            print s
             f.write(s + '\n')
         f.close()
         
@@ -303,9 +302,9 @@ if __name__ == "__main__":
     post_base_path = '/home/kqc/dataset/tianya-forum/'
     
     import sys
-    #post_list_path = sys.argv[1]
+    post_list_path = sys.argv[1]
 
-    post_list_path = post_base_path + ('%s-test-list.txt' % section_id)
+    #post_list_path = post_base_path + ('%s-test-list.txt' % section_id)
     f = codecs.open(post_list_path, 'r', 'utf8')
     post_id_list = []
     for line in f:
