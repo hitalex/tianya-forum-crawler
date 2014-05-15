@@ -59,7 +59,7 @@ class Comment(object):
         
         return s
         
-    def getSimpleString(self, delimiter):
+    def get_simple_string(self, delimiter):
         """ 获取简单字符串表示
         """
         s = u''
@@ -193,13 +193,14 @@ class Post(object):
         for kid in cnode.iterchildren():
             if kid.tag == 'a': # 评论回复
                 if kid.text != None:
-                    content += kid.text
+                    content += kid.text + ' '
                 if kid.tail != None:
-                    content += (kid.tail + '\n')
+                    content += (kid.tail + ' ')
+                content += '\t'
             elif kid.tag == 'br' and kid.tail != None:
-                content += (kid.tail.strip() + '\n')
+                content += (kid.tail.strip() + '\t')
             elif kid.tag == 'img':
-                content += u"（图片：" + kid.attrib['original'] + u"）" + "\n"
+                content += u"（图片：" + kid.attrib['original'] + u"）" + "\t"
             else:
                 pass
                 
@@ -211,7 +212,7 @@ class Post(object):
         """
         # 抽取topic首页的内容
         url = "http://bbs.tianya.cn/post-%s-%s-1.shtml" % (self.section_id, self.post_id)
-        print "Reading webpage: ", url
+        log.info("Extracting first page: " + url)
         
         # for debug
         if isinstance(webPage, unicode):
@@ -224,8 +225,13 @@ class Post(object):
         # 找到标题：如果标题太长，那么标题会被截断，原标题则会在帖子内容中显示
         # 如果标题不被截断，则原标题不会在帖子内容中显示
         
-        tmp = post_head.xpath(u"h1[@class='atl-title']/span[@class='s_title']/span")[0]
-        self.title = tmp.text.strip()
+        tmp = post_head.xpath(u"h1[@class='atl-title']/span[@class='s_title']")[0]
+        iter_obj = tmp.itertext()
+        try:
+            while True:
+                self.title += (iter_obj.next() + ' ')
+        except StopIteration:
+            pass
         
         atl_info = post_head.xpath(u"div/div[@class='atl-info']/span")
         assert(len(atl_info) == 4)        
@@ -238,12 +244,15 @@ class Post(object):
         self.pubdate = datetime.strptime(text[3:], "%Y-%m-%d %H:%M:%S")
         
         # 设置本帖子的最大评论页数
-        paginator = page.xpath(u"//div[@class='atl-pages']//a")
+        paginator = post_head.xpath(u"//div[@class='atl-pages']//a")
+        # NOTE: paginator会抽取页面上所有的页面链接..
         if len(paginator) == 0:
             self.total_comment_page = 1 # 如果没有paginator，则只有一页评论
         else:
             last_page_url = paginator[-2].attrib['href'].strip() # 最后一页评论的链接
-            m = regex_post.match(last_page_url)
+            m = regex_post.search(last_page_url)
+            if m == None:
+                log.info('Bad url: ' + last_page_url )
             max_page_text = m.group('page_index')
             self.total_comment_page = int(max_page_text)
         print "Total comment page: %d" % self.total_comment_page
@@ -296,16 +305,16 @@ class Post(object):
         content_node = comment_node.xpath(u"div[@class='atl-content']/div[@class='atl-con-bd clearfix']/div[@class='bbs-content']")[0]
         comment_content = self.extract_content(content_node)
         
-        print 'Lou id: ', cid
-        print 'Comment content: \n', comment_content
-        print ''
+        #print 'Lou id: ', cid
+        #print 'Comment content: \n', comment_content
+        #print ''
         
         # 这里暂不设置comment所引用的quote，而是只是设立标志位has_quote, 具体quote在抓取完topic之后再确定
         comment = Comment(cid, user_id, user_name, pubdate, comment_content, None, self.post_id, self.section_id)
         #print "Comment content: ", comment.content
         return comment
         
-    def extract_nonfirst_page(self, pageSource):
+    def extract_nonfirst_page(self, webPage):
         """ 抽取非第一页的评论
         """
         if isinstance(webPage, unicode):
@@ -326,9 +335,9 @@ class Post(object):
             self.lock.release()
         
         # 实际抓取网页时用
-        #m = regex_post.match(url)
-        #page_index = int(m.group('page_index'))
-        #self.parsedPageIndexSet.add(page_index)
+        m = regex_post.match(url)
+        page_index = int(m.group('page_index'))
+        self.parsedPageIndexSet.add(page_index)
         
         return newly_added
         
@@ -369,6 +378,7 @@ class Post(object):
             else:
                 # 链接找到的comment
                 comment.quote = quote_comment
+                print comment.get_simple_string("[=]")
                 log.info(u'评论 %s by %s 引用 评论 %s by %s' % (comment.cid, comment.user_name, comment.quote.cid, comment.quote.user_name))
         
 if __name__ == "__main__":
@@ -378,21 +388,23 @@ if __name__ == "__main__":
     
     congifLogger("log/models.log", 5)
     
-    post = Post('4316864', u'free')
-    f = codecs.open(u"./testpage/舌尖上的厨娘 （配图，配过程），挑战你的味蕾_天涯杂谈_天涯论坛.html", "r", 'utf8') # first page    
+    post = Post('4318716', u'free')
+    #f = codecs.open(u"./testpage/舌尖上的厨娘 （配图，配过程），挑战你的味蕾_天涯杂谈_天涯论坛.html", "r", 'utf8') # first page
+    f = codecs.open(u"./testpage/温故512：汶川地震的坍塌及重建_天涯杂谈_天涯论坛.html", "r", 'utf8') # first page    
     strfile_page1 = f.read()
     f.close()
+    """
     f = codecs.open(u"./testpage/舌尖上的厨娘 （配图，配过程），挑战你的味蕾(第2页)_天涯杂谈_天涯论坛.html", "r", 'utf8') # first page    
     strfile_page2 = f.read()
     f.close()
     f = codecs.open(u"./testpage/舌尖上的厨娘 （配图，配过程），挑战你的味蕾(第3页)_天涯杂谈_天涯论坛.html", "r", 'utf8') # first page    
     strfile_page3 = f.read()
     f.close()
-    
+    """
     # 抓取评论
     comment_list1 = post.extract_first_page(strfile_page1)
-    comment_list2 = post.extract_nonfirst_page(strfile_page2)
-    comment_list3 = post.extract_nonfirst_page(strfile_page3)
+    #comment_list2 = post.extract_nonfirst_page(strfile_page2)
+    #comment_list3 = post.extract_nonfirst_page(strfile_page3)
     
     post.sort_comment()
     

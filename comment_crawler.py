@@ -31,13 +31,13 @@ log = logging.getLogger('Main.CommentCrawler')
 
 class CommentCrawler(object):
     
-    def __init__(self, section_name, post_id_list, crawler_thread_num, save_thread_num, post_base_path):
+    def __init__(self, section_id, post_id_list, crawler_thread_num, save_thread_num, post_base_path):
         """
-        `section_name` 天涯的板块名称
+        `section_id` 天涯的板块名称
         `post_id_list` 需要抓取的post id的list
         `thread_num` 开启的线程数目
         post_base_path: 存储抓取结果的基本目录，每个post一个文件，并以该post的ID命名
-        """        
+        """
         # 抓取网页的线程池,指定线程数
         self.thread_pool = ThreadPool(crawler_thread_num)
         # 由于现在是将不同的topic信息保存到不同的文件中，所以可以同时存储
@@ -55,7 +55,7 @@ class CommentCrawler(object):
         self.failed = set()
         
         # 依次为每个小组抽取topic评论
-        self.section_name = section_name
+        self.section_id = section_id
         self.post_id_list = post_id_list # 等待抓取的topic列表
         self.current_post_id_list = list(post_id_list) # 用于逐步向任务列表中加入post id
         
@@ -68,25 +68,25 @@ class CommentCrawler(object):
         self.is_crawling = False
         
         # 每个topic抓取的最多comments个数
-        #self.MAX_COMMETS_NUM = 5000
+        #self.MAX_COMMETS_NUM = 1000
         self.MAX_COMMETS_NUM = float('inf')
-        
 
     def start(self):
-        print '\nStart Crawling comment list for group: ' + self.section_name + '...\n'
+        print '\nStart Crawling comment list for group: ' + self.section_id + '...\n'
         self.is_crawling = True
         self.thread_pool.startThreads()
         self.save_thread.startThreads()
         
         self.post_id_list = list(set(self.post_id_list)) # 消除重复的topic id
-        print u"Total number of post in section %s: %d." % (self.section_name, len(self.post_id_list))
+        print u"Total number of post in section %s: %d." % (self.section_id, len(self.post_id_list))
         
         # 初始化添加一部分post的id到列表
-        for i in xrange(self.self.thread_pool.threadNum * 2):
+        for i in xrange(self.thread_pool.threadNum * 2):
             # TODO: 这里的URL模式只是针对“天涯杂谈”部分的链接
-            post_id = self.current_post_id_list.pop()
-            url = "http://bbs.tianya.cn/post-free-%s-1.shtml" % post_id
-            self.thread_pool.putTask(self._taskHandler, url)
+            if len(self.current_post_id_list) > 0:
+                post_id = self.current_post_id_list.pop()
+                url = "http://bbs.tianya.cn/post-%s-%s-1.shtml" % (self.section_id, post_id)
+                self.thread_pool.putTask(self._taskHandler, url)
         
         # 完全抛弃之前的抽取深度的概念，改为随时向thread pool推送任务
         while True:
@@ -98,6 +98,7 @@ class CommentCrawler(object):
                 if url is not None: 
                     self.thread_pool.putTask(self._taskHandler, url)
                 else: # 已经不存在下一个链接
+                    #print 'No future visit url.'
                     break
             # 每隔一秒检查thread pool的队列
             time.sleep(2)
@@ -107,6 +108,7 @@ class CommentCrawler(object):
             elif len(self.finished) > len(self.post_id_list):
                 assert(False)
                 
+            print 'Number of task in LIFO queue: ', self.thread_pool.taskQueue.qsize()
             print 'Total posts: %d, Finished topic: %d' % (len(self.post_id_list), len(self.finished))
                 
         # 等待线程池中所有的任务都完成
@@ -126,7 +128,7 @@ class CommentCrawler(object):
             time.sleep(2)
         
         # 记录抓取失败的topic id
-        log.info('抓取失败的post id：')
+        log.info(u'抓取失败的post id：')
         s = ''
         for post_id in self.failed:
             s += (post_id + '\n')
@@ -137,7 +139,7 @@ class CommentCrawler(object):
         assert(self.thread_pool.getTaskLeft() == 0)
         
         print "Main Crawling procedure finished!"
-        log.info("Processing done with tianya section: %s" % (self.section_name))
+        log.info("Processing done with tianya section: %s" % (self.section_id))
 
     def stop(self):
         self.is_crawling = False
@@ -154,17 +156,20 @@ class CommentCrawler(object):
         flag = webPage.fetch()
         m = regex_post.match(url)
         if m == None:
-            log.info('Post链接格式错误：%s in Group: %s.' % (url, self.section_name))
+            log.info(u'Post链接格式错误：%s in Group: %s.' % (url, self.section_id))
             return True
+        else:
+            log.info(u'访问：' + url)
             
         comment_page_index = int(m.group('page_index'))
         post_id = m.group('post_id')
         if flag:
             if comment_page_index == 1: # 首页评论
-                post = Post(post_id, self.section_name)
+                post = Post(post_id, self.section_id)
                 # 解析讨论帖的第一个页：包括原帖内容和评论内容
                 comment_list = post.parse(webPage, isFirstPage = True) # First page parsing
                 self.post_dict[post_id] = post
+                self.next_page[post_id] = 2
                 
             elif comment_page_index > 1:
                 # 抽取非第一页的评论数据
@@ -172,28 +177,28 @@ class CommentCrawler(object):
                     post = self.post_dict[post_id]
                 else:
                     # 这里的含义为：必须先处理第一页的评论，否则该post_id不会作为self.topic_dict的键出现
-                    log.error('错误：必须先抽取第一页的评论数据：post id: %s' % post_id)
+                    log.error(u'错误：必须先抽取第一页的评论数据：post id: %s' % post_id)
                     self.failed.add(topic_id)
                     self.finished.add(topic_id)
                     return False
                 
                 if post is None:
-                    log.error('未知程序错误：结束post id为%s的抽取，释放内存。' % post_id)
+                    log.error(u'未知程序错误：结束post id为%s的抽取，释放内存。' % post_id)
                     self.post_dict[post_id] = post
                     return False
                     
                 comment_list = post.parse(webPage, isFirstPage = False) # non-firstpage parsing
             else:
-                log.info('Post链接格式错误：%s in Group: %s.' % (url, self.section_name))
+                log.info(u'Post链接格式错误：%s in Group: %s.' % (url, self.section_id))
 
             # 判断抓取是否结束，如果结束，则释放dict内存
             # 这个很重要，因为随着topic数量增多，内存会占很多
-            if post.isComplete():
+            if post.is_complete():
                 # 对评论进行排序，并查找quote comment
-                self.post_dict[post_id].sortComment()
+                self.post_dict[post_id].sort_comment()
                 self.save_thread.putTask(self._saveTopicHandler, self.post_dict, post_id)
                 self.finished.add(post_id)
-                log.info('Topic: %s 抓取结束。' % post_id)
+                log.info(u'Topic: %s 抓取结束。' % post_id)
                 
             self.visited_href.add(url)
             return True
@@ -226,15 +231,20 @@ class CommentCrawler(object):
             else:
                 # 该topic有多页评论
                 next_page_index = self.next_page[post_id]
-                url = "http://bbs.tianya.cn/post-free-%s-%d.shtml" % (post_id, next_page_index)
-                if next_page_index <= post.total_comment_page - 1:
+                if next_page_index > post.total_comment_page:
+                    continue
+                else:
+                    url = "http://bbs.tianya.cn/post-free-%s-%d.shtml" % (post_id, next_page_index)
                     self.next_page[post_id] = next_page_index + 1
                     return url
                 
         # 如果当前正在处理的帖子全部已经抓取完毕，则加入新帖子post_id
-        post_id = self.current_post_id_list.pop()
-        url = "http://bbs.tianya.cn/post-free-%s-1.shtml" % post_id
-        return url
+        if len(self.current_post_id_list) > 0:
+            post_id = self.current_post_id_list.pop()
+            url = "http://bbs.tianya.cn/post-%s-%s-1.shtml" % (self.section_id, post_id)
+            return url
+        else:
+            return None
     
     def _saveTopicHandler(self, post_dict, post_id):
         """ 存储抓取完毕的帖子信息以及其对应的Comment。
@@ -243,25 +253,26 @@ class CommentCrawler(object):
         post_id 需要存储的post id
         """
         post = post_dict[post_id]
-        post_path = self.base_path + group_id + '/' + post_id + '-info.txt'
+        post_path = self.base_path + self.section_id + '/' + post_id + '-info.txt'
         # 存储topic本身的信息
         f = codecs.open(post_path, 'w', 'utf-8')
-        s = post.getSimpleString('[=]')
+        s = post.get_simple_string('[=]')
         f.write(s + '\n')
         
         # 存储comment信息,存储到相同的文件中
         for comment in post.comment_list:
-            s = comment.getSimpleString('[=]')
+            s = comment.get_simple_string('[=]')
+            print s
             f.write(s + '\n')
         f.close()
         
         # 释放资源
         # NOTE: del self.post_dict[post_id]不能达到效果，如果需要根据post_id是否在
         # self.post_dict中来判断是否已经抓取该帖子
-        self.topic_dict[topic_id] = None
+        self.post_dict[post_id] = None
         self.next_page[post_id] = None
         
-        log.info("Topic: %s 存储结束。" % topic_id)
+        log.info(u"Topic: %s 存储结束。" % post_id)
 
     def _getAllHrefsFromPage(self, url, pageSource):
         '''解析html源码，获取页面所有链接。返回链接列表'''
@@ -288,10 +299,13 @@ if __name__ == "__main__":
     stacktracer.trace_start("trace.html",interval=5,auto=True) # Set auto flag to always update file!
     congifLogger("log/comment_crawler.log", 5)
     
+    section_id = 'free'
+    post_base_path = '/home/kqc/dataset/tianya-forum/'
+    
     import sys
-    post_list_path = sys.argv[1]
+    #post_list_path = sys.argv[1]
 
-    MAX_TOPIC_NUM = float('inf') # 每个小组最多处理的topic的个数
+    post_list_path = post_base_path + ('%s-test-list.txt' % section_id)
     f = codecs.open(post_list_path, 'r', 'utf8')
     post_id_list = []
     for line in f:
@@ -299,11 +313,8 @@ if __name__ == "__main__":
         if line is not "":
             post_id_list.append(line)
     f.close()
-    
-    section_name = u'天涯杂谈'
-    post_base_path = '/home/kqc/dataset/tianya-forum/' + section_name + '/'
-    
-    comment_crawler = CommentCrawler(section_name, post_id_list, 5, 10, post_base_path)
+        
+    comment_crawler = CommentCrawler(section_id, post_id_list, 5, 10, post_base_path)
     comment_crawler.start()
     
     print "Done"
