@@ -200,7 +200,7 @@ class Post(object):
             elif kid.tag == 'br' and kid.tail != None:
                 content += (kid.tail.strip() + '\t')
             elif kid.tag == 'img':
-                content += u"（图片：" + kid.attrib['original'] + u"）" + "\t"
+                content += u"（图片：" + kid.attrib['src'] + u"）" + "\t"
             else:
                 pass
                 
