@@ -234,14 +234,20 @@ class Post(object):
             pass
         
         atl_info = post_head.xpath(u"div/div[@class='atl-info']/span")
-        assert(len(atl_info) == 4)        
-        # 作者信息
-        anode = atl_info[0].xpath(u"a")[0]
-        self.user_id = anode.attrib['uid']
-        self.user_name = anode.attrib['uname']
-        # 发表日期，确保其实unicode编码
-        text = atl_info[1].text.strip()
-        self.pubdate = datetime.strptime(text[3:], "%Y-%m-%d %H:%M:%S")
+        #assert(len(atl_info) == 4)
+        for span in atl_info:
+            if span.text == None:
+                continue
+                
+            if u'楼主' in span.text:
+                # 作者信息
+                anode = atl_info[0].xpath(u"a")[0]
+                self.user_id = anode.attrib['uid']
+                self.user_name = anode.attrib['uname']
+            elif u'时间' in span.text:
+                # 发表日期，确保其实unicode编码
+                text = atl_info[1].text.strip()
+                self.pubdate = datetime.strptime(text[3:], "%Y-%m-%d %H:%M:%S")
         
         # 设置本帖子的最大评论页数
         paginator = post_head.xpath(u"//div[@class='atl-pages']//a")
