@@ -14,4 +14,4 @@ regex_next_page = re.compile(ur"http://bbs\.tianya\.cn/list\.jsp\?item=free&next
 # 用户链接模式
 regex_user = re.compile(ur"^http://www\.tianya\.cn/(\d+)")
 
-regex_quote = re.compile(ur'@(?P<uname>.*?)\s*(?P<lou_index>\d+)楼\s*(?P<date>\d+-\d+-\d+\s\d+:\d+:\d+)')
+regex_quote = re.compile(ur'@(?P<uname>[^@\s]+?)\s+(?P<lou_index>\d+)楼\s+(?P<date>\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})', re.UNICODE)
