@@ -113,6 +113,7 @@ class CommentCrawler(object):
                 assert(False)
                 
             print 'Number of task in LIFO queue: ', self.thread_pool.taskQueue.qsize()
+            print 'Number of task in save queue: ', self.save_thread.taskQueue.qsize()
             print 'Total posts: %d, Finished topic: %d' % (len(self.post_id_list), len(self.finished))
                 
         # 等待线程池中所有的任务都完成
@@ -253,7 +254,10 @@ class CommentCrawler(object):
         不过，跟_saveHandler函数不同的是，这里是按照topic id存储
         post_dict 存储topic信息的字典
         post_id 需要存储的post id
+        
+        NOTE: 因为随时可能被ctrl+C终止，而此时可能有些帖子的内容还没有保存完成。
         """
+        #TODO: 添加SIGINT handler
         # 在保存结果钱，对评论进行排序，并查找quote comment        
         post = post_dict[post_id]
         post.sort_comment()

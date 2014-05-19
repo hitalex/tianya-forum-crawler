@@ -246,7 +246,7 @@ class Post(object):
                 self.user_name = anode.attrib['uname']
             elif u'时间' in span.text:
                 # 发表日期，确保其实unicode编码
-                text = atl_info[1].text.strip()
+                text = span.text.strip()
                 self.pubdate = datetime.strptime(text[3:], "%Y-%m-%d %H:%M:%S")
         
         # 设置本帖子的最大评论页数
